@@ -1,0 +1,2031 @@
+#!/usr/bin/perl
+
+my $TITLE 		= 'gogo';
+my $VERSION 	= '0.4';
+my $DATE		= 'October 2009';
+my $DESCRIPTION = 'tool for processing gene order data';
+
+#
+# 	written by Walker pett
+# 	will.pett@gmail.com
+#
+
+##################
+# Perl libraries #
+##################
+
+
+use strict;
+
+use sigtrap 'handler' => \&_sig_exit, 'INT';
+
+if($Bio::Root::Version::VERSION < 1.006 || $Bio::Root::Version::VERSION > 1.01){
+	print "Bioperl v1.6.0 or higher is required for gnorder\n";
+	exit;
+}
+
+use Bio::GeneOrder;
+use Bio::GeneOrder::Set;
+use Bio::GeneOrder::SetIO;
+use Bio::GeneOrder::SetIO::nexus;
+use Bio::GeneOrder::Distance;
+use Bio::TreeIO;
+
+use Bio::DB::RefSeq;
+use Bio::Tree::DistanceFactory;
+use Bio::SeqIO;
+use Bio::Matrix::IO;
+use Bio::Root::IO;
+
+use Text::ParseWords;
+
+use Term::ReadLine;
+use Term::ReadKey;
+
+use Clone qw(clone);
+
+eval 'use Getopt::Long qw(GetOptionsFromArray)';
+die "Getopt::Long v2.36 or later is required: $@" if $@;
+
+####################################################################################
+# Initialization
+
+
+# Global Variables
+my ($term,$prompt,$command,%commands,%options,@matched,$seq,
+	$cw_set,$setio,$format,$encoding,$pointer,$verbose,@line,$line,%limits,$applied,$caught,
+	@ascii,%x_s,%y_s,$tree_length,$display_width,@results,$basedir,$category,$main_filter);
+
+$verbose =1;
+$pointer =0;
+
+$caught = 0;
+
+Getopt::Long::Configure('gnu_compat');
+
+# Associate subroutines with commands
+%commands = ('open'		=> \&Open,
+			 'save'		=> \&Save,
+			 'import' 	=> \&Import,
+			 'export'	=> \&Export,
+			 'compare'	=> \&Compare,
+			 'convert'	=> \&Convert,
+			 'edit'		=> \&Edit,
+			 'merge'	=> \&Merge,
+			 'breakpoints' => \&MatrixShortcut,
+			 'copies'		=> \&MatrixShortcut,
+			 'adjacencies'	=> \&MatrixShortcut,
+			 'inversions'	=> \&MatrixShortcut,
+			 'NJ'		=> \&DisplayTree,
+			 'UPGMA'	=> \&DisplayTree,
+			 'rename'	=> \&ApplyOptions,
+			 'filter' 	=> \&ApplyOptions,
+			 'reorder'  => \&ApplyOptions,
+			 'list'		=> \&List,
+			 'help'		=> \&Help,
+			 '?'		=> \&Help,
+			 'cache'	=> \&EmptyCache);
+	
+####################################################################################
+####################################################################################
+# Program start
+#
+
+#Allow usage from the command line
+#Exit when complete
+if(@ARGV){
+	ExecuteInput(@ARGV);
+	exit;
+}
+
+#If there are no command line arguments
+#Enter readline mode
+
+$term = new Term::ReadLine "$TITLE";
+_read_history();
+
+printf ("\n$TITLE - $DESCRIPTION (v.$VERSION)\n".
+	  "using readline package: %s\n".
+	  "Type 'help' for commands and usage instructions\n\n",$term->ReadLine);
+
+my $prompt = "$TITLE> ";
+my $OUT = $term->OUT || \*STDOUT;
+
+Readline();
+
+_write_history();
+print "Bye.\n";
+
+#
+# Program end
+####################################################################################
+####################################################################################
+
+####################################################################################
+# Subroutines
+#
+
+#Readline entry
+sub Readline {
+	while ( defined ($_ = $term->readline($prompt)) ) {
+		s/^\s+//;
+	
+		next if /^$/;
+		
+		if (/^(?:q(?:uit)?|bye|exit)$/i) {
+			last;
+		}elsif(/./){
+			$line = $_;
+			my @shellwords = eval { Text::ParseWords::shellwords($line) };
+			warn($@), next if $@;
+		
+			warn("Text::Parsewords could not parse the line [$_]"),
+				next unless @shellwords;
+	
+			&ExecuteInput(@shellwords);
+			
+		}
+	}
+}
+
+#Get our options from an array and execute the command
+sub ExecuteInput {
+	my @args = @_;
+	
+	#Get our command
+	%options = ();
+	$command = $args[0];
+	$args[0] = "-".$args[0];
+	$command = '\?' if $command eq '?';
+	
+	@matched = grep($_ =~ /^$command/i, keys %commands);
+	warn("Unknown command '$command'.\n"),
+		return unless scalar(@matched) == 1;
+
+	@line = @args;
+	GetOptionsFromArray(\@args, \%options,
+			#Commands
+			'open=s{,}' => \@{ $options{open}},
+			'save=s',
+			'import=s{,}' => \@{ $options{import}},
+			'export=s',
+			'compare:s{,}' => \@{ $options{compare}},
+			'convert=s{,}' => \@{ $options{convert}},
+			'edit=s{,}' => \@{ $options{edit}},
+			'merge=s{,}' => \@{ $options{merge}},
+			'rename=s{,}' => \@{ $options{rename}},
+			'list:i{,}' => \@{ $options{list}},
+			'filter',
+			'reorder=s',
+			'cache',
+			#Options
+			'UPGMA:s',
+			'NJ:s',
+			'from=s',
+			'to=s',
+			'encoding=s',
+			'format=s',
+			'outfile=s',
+			'table',
+			'matrix=s',
+			'files',
+			'all',
+			'add',
+			'noadd',
+			'local',
+			'verbose' => sub { $verbose = 1;},
+			'quiet' => sub { $verbose = 0;},
+			'except',
+			'clear',
+			'genes:s{,}' => \@{ $options{genes}},
+			'type',
+			'names',
+			'orders=s{,}' => \@{ $options{orders}},
+			'clades=s{,}' => \@{ $options{clades}},
+			'taxonomy',
+			'flush',
+			'unique',
+			'minimum' => sub { _min_max(1); },
+			'maximum' => sub { _min_max(2); },
+			'next',
+			'cluster_size=i',
+			'no_genes=i',
+			'adjacencies:i',
+			'breakpoints:i',
+			'inversions:i',
+			'copies:i',
+			'help|?:s',
+			);
+
+	if($limits{set}){
+		_min_max(0);
+	}
+	
+	if($matched[0] ne 'help' && grep($_ =~ /^(help|\?)$/i,@line)){
+		&Help($matched[0]);
+	}else{
+		$commands{ $matched[0]}->();
+	}
+}
+
+#Import gene orders from go files
+sub Open {
+	
+	$options{format} = 'fasta';
+	$options{import} = $options{open};
+
+	&Import();
+
+}
+
+#Export gene orders to go files
+sub Save {
+
+	if(defined $options{format} && $options{format} ne 'go'){
+		&Export($cw_set);
+	}else{
+		$options{format} = 'go';
+		$options{export} = $options{save};
+	
+		&Export($cw_set);
+	}
+
+}
+
+
+#Import gene orders from input files
+sub Import {
+
+	if(defined $cw_set){
+		if($options{add}){
+			$options{noadd}=0;
+		}elsif($options{noadd}){
+			$options{add}=0;
+		}else{
+			print "Do you want to overwrite the gene orders already in memory? [y/n] ";
+			my $choice = <STDIN>;
+			chomp $choice;
+			while(!($choice =~ /n/i) && !($choice =~ /y/i)){
+				print "Do you want to overwrite the gene orders already in memory? [y/n] ";
+				my $choice = <STDIN>;
+				chomp $choice;
+			}
+			if($choice =~ /n/i){
+				print "Do you want to add to the gene orders already in memory? [y/n] ";
+				my $choice = <STDIN>;
+				chomp $choice;
+				while(!($choice =~ /n/i) && !($choice =~ /y/i)){
+					print "Do you want to add to the gene orders already in memory? [y/n] ";
+					my $choice = <STDIN>;
+					chomp $choice;
+				}
+				if($choice =~ /n/i){
+					return;
+				}else{
+					$options{add}=1;
+					$options{noadd}=0;
+				}
+			}else{
+				$options{add}=0;
+				$options{noadd}=1;
+
+			}
+		}
+	}else{
+		$options{add}=0;
+		$options{noadd}=1;
+	}
+
+	if($options{add}){
+		return unless( &GetInputs($options{import}));
+		return unless( &ApplyOptions($cw_set));
+	}else{
+		return unless( $cw_set = &GetInputs($options{import}));
+		return unless( &ApplyOptions($cw_set));
+	}
+
+}
+	
+#Exports contents of a set
+sub Export {
+	my $set = shift;
+
+	unless(defined $set){
+		unless(defined $cw_set){
+			print "Error: No gene orders have been imported\n";
+			return;
+		}
+		
+		$set = $cw_set;
+	}
+
+	return unless( &ApplyOptions($set));
+
+	if( $options{format} eq "" || $options{format} =~ /^-/){
+		print "Error: No output format specified\n";
+		return 0;
+	}
+
+	$format = $options{format};
+
+	if($options{export} eq "" || $options{export} =~ /^-/){
+		print "Error: No output file specified\n\n";
+		return 0;
+	}
+	
+	my $io;
+	if($format eq 'object'){
+		$io = 'obj';
+	}else{
+		my $module = "Bio::GeneOrder::SetIO::$format";
+		eval "require $module";
+		if($@){
+			print "$@";
+			print "Error: Unsupported output format '$format'.\n";
+			return 0;
+		}
+		$io = 'set';
+		$module.='::';
+		no strict;
+		if(${$module}{ENCODINGS}){
+			use strict;
+			unless( defined $options{encoding}){
+				print "Error: encoding is required for format '$format'\n\n";
+				return 0;
+			}
+			$encoding = $options{encoding};
+		}
+		use strict;
+	}
+	
+	unless( open FILE, ">$options{export}"){
+		print "Error: Can't open output file\n";
+		return 0;
+	}
+	
+	my $file = $options{export};
+	if($io eq 'set'){
+		eval{ $setio = Bio::GeneOrder::SetIO->new( -file => ">$file",
+											 	   -format => "$format",
+											 	   -encoding => "$encoding" ) };
+		if($@){print "Error: $@";return 0;}
+		eval{ $setio->write_set($set)};
+		if($@){print "Error: $@";return 0;}
+	}else{
+		eval{ $set->save($file)};
+		if($@){print "Error: $@";return 0;}
+	}
+	print $set->no_orders," gene orders written to $format file '$file'\n" 
+		unless($options{quiet});
+}
+
+#Quick comparisons
+sub MatrixShortcut {
+	$options{all} =1;
+	if($matched[0] eq 'breakpoints'){
+		$options{matrix} = 'breakpoints';
+		&Compare();
+	}elsif($matched[0] eq 'copies'){
+		$options{matrix} = 'copies';
+		&Compare();
+	}elsif($matched[0] eq 'adjacencies'){
+		$options{matrix} = 'adjacencies';
+		&Compare();
+	}elsif($matched[0] eq 'inversions'){
+		$options{matrix} = 'inversions';
+		&Compare();
+	}
+}
+
+#Quick comparisons
+sub EmptyCache {
+	my $set;
+	unless(defined $cw_set){
+		print "Error: No gene orders have been imported\n";
+		return 0;
+	}
+
+	$set = $cw_set;
+	
+	$set->distance->_cache('clear');
+}
+
+#Compares gene orders in set
+sub Compare {
+	my $set;
+	if($options{files}){
+		return unless( $set = &GetInputs($options{compare}));
+	}else{
+		unless(defined $cw_set){
+			print "Error: No gene orders have been imported\n";
+			return 0;
+		}
+
+		$set = $cw_set;
+	}
+
+	my ($comparison,$num_compared);
+	if($options{matrix}){
+		$options{matrix} =~ s/^-//;
+		
+		unless(grep($options{matrix} eq $_, Bio::GeneOrder::SetIO::nexus->supported_encodings)){
+			print "Error: Unknown matrix format: '$options{matrix}'\n";
+			return 0;
+		}
+		
+		if($options{NJ} || $options{UPGMA}){
+			my @matrix = eval { Bio::GeneOrder::SetIO::nexus->get_matrix($set,$options{matrix}) };
+			return (${ $matrix[0]}[0],$matrix[3]);	
+		}else{		
+			my ($wchar) = GetTerminalSize();		
+			#The copies matrix does not have index numbers, so size the margin accordingly		
+			my $indexW = $options{matrix} eq 'copies' ? 0 : length($set->no_orders)+2;		
+			$comparison .= "$options{matrix} matrix:\n";		
+			#adjust the terminal width with the copies index width		
+			my @matrix = eval { Bio::GeneOrder::SetIO::nexus->get_matrix($set,$options{matrix},$wchar - $indexW) };		
+			if($@){print "Error: $@";return 0;}		
+			my ($charwidth,$margin,$ntax) = ($matrix[1],$matrix[2],$matrix[3]);		
+		
+			#increase the margin width by the index width		
+			$margin += $indexW;		
+		
+			my $tax=1;		
+			foreach my $chunk (@{ $matrix[0]}){		
+				my $i=1;		
+				#this loop replaces taxon names with their indexed names		
+				foreach($set->orders){		
+					my $ii = sprintf("%-".(length($ntax)+2)."d",$i++);		
+					my $name = $_->name;		
+					my $namei = $name;		
+					$namei =~ s/\|/\\|/g;		
+					$chunk =~ s/'$namei'/$ii'$name'/s;		
+				}		
+		
+				my $spacer = ' ' x $margin;		
+		
+				$i = 0;		
+				while($i++ < int(($wchar-$margin)/($charwidth + 1))){		
+					last if $tax > $ntax;		
+					$spacer .= sprintf("%-".($charwidth + 1)."d",$tax);		
+					$tax++;		
+				}		
+				$comparison .= "$spacer\n" .'-' x (length($spacer)) ."\n";		
+				$comparison .= $chunk;		
+			}		
+		}
+	}else{
+		my @orders = $set->orders;
+		my @to_compare;
+		if($options{names}){
+			if(@{$options{compare}} == 1){
+				push @to_compare, eval{ $set->orders( '-name' => ${$options{compare}}[0]) };
+				
+				if($@){print "Error: $@";return 0;}
+				unless(scalar(@to_compare)>0 && $to_compare[0] ne ''){print "No gene order matching name '${$options{compare}}[0]'\n"; return 0;}
+				
+				push @to_compare, grep($_->name ne ${$options{compare}}[0], @orders);
+			}else{
+				foreach my $name (@{$options{compare}}){
+					my $order = eval{ $set->orders( '-name' => $name) };
+					unless(defined $order){print "No gene order matching name '${$options{compare}}[0]'\n"; return 0;}
+					if($@){print "Error: $@";return 0;}
+					push @to_compare, $order;
+				}
+			}	
+		}elsif(${$options{compare}}[0] ne ""){
+			if(@{$options{compare}} == 1){
+				my $index = ${$options{compare}}[0];
+				unless( $index =~ /^\d+$/){
+					print "Error: Value '$index' is not numeric. ".
+						  "'compare' expects numeric values unless '-files' or '-names' is set.\n";
+					return 0;
+				}
+				if($index == 0){
+					print "Error: No gene order at index 0\n";
+					return 0;
+				}
+				@to_compare = @orders;
+				my $order = splice @to_compare, ($index -1), 1;
+				if(!defined $order){
+					print "Error: No gene order at index $index\n";
+					return 0;
+				}
+				unshift @to_compare, $order;
+			}else{
+				foreach my $index (@{$options{compare}}){
+					unless( $index =~ /^\d+$/){
+						print "Error: Value '$index' is not numeric.".
+							  "'compare' expects numeric values unless '-files' is set.\n";
+						return 0;
+					}
+					if($index == 0){
+						print "Error: No gene order at index 0\n";
+						return 0;
+					}
+					my $order = $orders[$index -1];
+					if(!defined $order){
+						print "Error: No gene order at index $index\n";
+						return 0;
+					}
+					push @to_compare, $order;
+				}
+			}
+		}else{
+			@to_compare = @orders;
+		}
+		
+		$num_compared = scalar(@to_compare);
+		@orders = $set->orders;
+		
+		#Now build comparisons depending on whether we are doing all possible comparisons
+		
+		my $orderA = $to_compare[0];
+		@to_compare = grep($orderA->shared_bounds($_) > 0, sort {$orderA->shared_bounds($b) <=> $orderA->shared_bounds($a) } @to_compare);
+		
+		my @comparison;
+		
+		my @orderA = $orderA->order;
+		foreach(@orderA){
+			push @{ $comparison[0] }, split ' ', $_;
+		}
+		
+		my ($wchar) = GetTerminalSize();
+		my $w = (sort {$b <=> $a} map(length($_),@{ $comparison[0] }) )[0] +5;
+		
+		my $tax_width = int(($wchar-20)/$w);
+		my $count = 0;
+		my $first = 1;
+		
+		foreach my $order (@to_compare){
+			$comparison .= sprintf("%-".(length(scalar @orders) +1)."d%s\n",$set->index($order->name) + 1,$order->name);
+		}
+		
+		$comparison .= "\nShared boundaries:\n";
+		$comparison .= sprintf("%-".$w."s",$set->index($orderA->name)+1);
+		$first = 1;
+		
+		while($count < scalar @to_compare){
+			for(my $u=$count+$first;$u<($count+$tax_width);$u++){
+				last if $u >= scalar @to_compare;
+				my @shared = $orderA->shared_bounds($to_compare[$u]);
+				$comparison .= sprintf("%-".$w."s",$set->index($to_compare[$u]->name)+1);
+			
+				my @compshare;
+				my %bounds;
+				my @compare_to = @{ $comparison[0] };
+				
+				#Go through each gene and find the gene directly up and downstream
+				for(my $k=0;$k<scalar(@compare_to);$k++){
+					my $down_k = ($k-1);
+					my $k_up = ($k+1) % scalar(@compare_to);
+					
+					my @rc;	#reverse complemented genes
+					$rc[0] = $compare_to[$down_k];
+					$rc[1] = $compare_to[$k_up];
+					$rc[2] = $compare_to[$k];
+					
+					for(my $i=0;$i<3;$i++){
+						unless($rc[$i] =~ s/^\-//){
+							$rc[$i] =~ s/^/\-/;
+						}
+					}
+					
+					#Determine if the downstream boundary is a shared boundary
+					my $shared_1_k = $bounds{$down_k}{$k} ? 1 : 
+								grep(	($_->[0] eq $compare_to[$down_k] && 
+										$_->[1] eq $compare_to[$k]) || 
+										($_->[1] eq $rc[0] &&
+										$_->[0] eq $rc[2]), @shared) ? ++$bounds{$down_k}{$k} : 0;
+					
+					#Determine if the upstream boundary is a shared boundary
+					my $shared_k_1 = $bounds{$k}{$k_up} ? 1 : 
+								grep( ($_->[0] eq $compare_to[$k] && 
+										$_->[1] eq $compare_to[$k_up]) || 
+										($_->[1] eq $rc[2] &&
+										$_->[0] eq $rc[1]), @shared) ? ++$bounds{$k}{$k_up} : 0;
+					
+					#Print the proper symbol
+					if($shared_1_k && $shared_k_1){
+						push @compshare, "| $compare_to[$k]";
+					}elsif($shared_1_k){
+						push @compshare, "v $compare_to[$k]";
+					}elsif($shared_k_1){
+						push @compshare, "^ $compare_to[$k]";
+					}else{
+						push @compshare, "";
+					}
+				}
+				
+				push @comparison, \@compshare;
+			}
+			
+			$comparison .="\n";
+		
+			#build comparison
+			for(my $i=0;$i<scalar @{ $comparison[0] };$i++){
+				for(my $u=$count;$u<($count+$tax_width);$u++){
+					last if $u >= scalar @comparison;
+					
+					$comparison .= sprintf("%-".$w."s",${$comparison[$u]}[$i]);
+				}
+				$comparison .= "\n";
+			}
+			
+			$comparison .= "\n";
+			
+			$count += $tax_width;
+			$first = 0;
+		}
+		
+	}
+
+	if( defined($options{outfile})){
+		if($options{outfile} eq "" || $options{outfile} =~ /^-/){
+			print "Error: No output file specified\n\n";
+			return 0;
+		}
+		
+		unless( open FILE, ">$options{outfile}"){
+			print "Error: Can't open output file\n";
+			return 0;
+		}
+		print FILE $comparison;
+		close FILE;
+
+		if( $options{all}){
+			print "".($num_compared*($num_compared-1)/2)." comparisons made. Results written to file '$options{outfile}'\n" 
+				if($verbose);
+		}else{
+			print "".($num_compared-1)." comparisons made. Results written to file '$options{outfile}'\n" 
+				if($verbose);
+		}
+	}else{
+		print "$comparison\n";
+		unless($options{matrix}){
+			if( $options{all}){
+				print "".($num_compared*($num_compared-1)/2)." comparisons made.\n" 
+					if($verbose);
+			}else{
+				print "".($num_compared-1)." comparisons made.\n" 
+					if($verbose);
+			}
+		}
+	}
+}
+
+#Display a NJ or UPGMA tree
+sub DisplayTree {
+	unless(defined $cw_set){
+		print "Error: No gene orders have been imported\n";
+		return;
+	}
+	
+	$options{matrix} = $options{NJ} || $options{UPGMA};
+	
+	unless(defined $options{matrix}){
+		print "Error: No distance specified\n";
+		return;
+	}
+	unless(grep($options{matrix} eq $_, Bio::GeneOrder::Distance->supported_distances)){
+		print "Error: Unknown distance: '$options{matrix}'\n";
+		return;
+	}
+	
+	my ($matrix,$ntax) = &Compare();
+	unless($matrix){
+		return 0;
+	}
+	
+	my $io = eval{ Bio::Root::IO->new() };
+	if($@){print "Error: $@";return 0;}
+	
+	my ($tfh,$tfn) = eval{ $io->tempfile() };
+	if($@){print "Error: $@";return 0;}
+	print $tfh "\t$ntax\n$matrix";
+	close($tfh);
+
+	my $parser = eval{ Bio::Matrix::IO->new( -format   => 'phylip',
+                                   	         -file     => $tfn) };
+	if($@){print "Error: $@";return 0;}
+	
+	$matrix = eval{ $parser->next_matrix };
+	unlink($tfn);
+	if($@){print "Error: $@";return 0;}
+
+	my $tfactory;
+	if($options{NJ}){
+		$tfactory = eval{ Bio::Tree::DistanceFactory->new(-method => "NJ") };
+	}else{
+		$tfactory = eval{ Bio::Tree::DistanceFactory->new(-method => "UPGMA") };
+	}
+	if($@){print "Error: $@";return 0;}
+
+  	my $tree = eval{ $tfactory->make_tree($matrix) };
+	if($@){print "Error: $@";return 0;}
+
+	if($options{NJ}){
+		print "Neighbor-Joining Tree\n\n";
+	}else{
+		print "UPGMA Tree\n\n";
+	}
+	
+	if($options{outfile}){
+		my $format = defined $options{'format'} ? $options{'format'} : 'newick';
+		my $treeio = eval{Bio::TreeIO->new(-file => ">$options{outfile}", -format => $format)};
+		if($@){print "Error: $@";return 0;}
+		$treeio->write_tree($tree);
+	}
+
+	print _write_tree_Helper($tree);
+}
+
+#Display gene orders stored in memory
+sub List {
+	unless(defined $cw_set){
+		print "Error: No gene orders have been imported\n";
+		return;
+	}
+	
+	my ($wchar) = GetTerminalSize();
+
+	my @orders = $cw_set->orders;
+	if($options{all}){
+		my $i=1;
+		foreach my $order (@orders){
+			my $width = length($order->name);
+			printf ("%-4d%s\n",$i++,$order->name);
+			unless($options{names} || $options{taxonomy}){
+				print $order->order,"\n","-" x $wchar,"\n";
+			}
+			if($options{taxonomy}){
+				my @tax = join '; ', $order->classification;
+				print "@tax\n","-" x $wchar,"\n";
+			}
+		}
+	}elsif($options{next}){
+		my $width = length($orders[$pointer]->name);
+		printf ("%-4d%s\n",$pointer+1,$orders[$pointer]->name.":");
+		print $orders[$pointer]->order,"\n","-" x $wchar,"\n";
+
+		$pointer = $pointer+1 == scalar(@orders) ? 0 : $pointer +1;
+	}elsif(@{$options{orders}}){
+		if(${ $options{orders}}[0] == 0){
+			if($line =~ /orders 0/){
+				print "Error: No gene order at index 0\n";
+				return;
+			}elsif($line =~ /orders \D/){
+				print "Error: orders expects numeric values.\n";
+				return;
+			}else{
+				$options{all}=1;
+				&List();
+				return;
+			}
+		}elsif(${ $options{orders}}[0] < 0){
+			print "Error: No gene order at index ${ $options{orders}}[0].\n";
+			return;
+		}
+
+		foreach my $index (@{$options{orders}}){
+			$index--;
+			my $order = eval{ $orders[$index] };
+			if($@){
+				print "Error: $@";
+				return 0;
+			}elsif($order){
+				my $width = length($orders[$index]->name);
+				printf ("%-4d%s\n",$index+1,$orders[$index]->name.":");
+				unless($options{names} || $options{taxonomy}){
+					print $order->order,"\n","-" x $wchar,"\n";
+				}
+				if($options{taxonomy}){
+					my @tax = join '; ', $order->classification;
+					print "@tax\n","-" x $wchar,"\n";
+				}
+			}else{
+				$index++;
+				print "Error: No gene order at index $index\n";
+			}
+		}
+	}elsif(@{ $options{list}}){
+		if(${ $options{list}}[0] == 0){
+			if($line =~ /^list 0/){
+				print "Error: No gene order at index 0\n";
+				return;
+			}elsif($line =~ /^list \D/ && !($line =~ /^list -/)){
+				print "Error: List expects numeric values.\n";
+				return;
+			}else{
+				$options{all}=1;
+				&List();
+				return;
+			}
+		}elsif(${ $options{list}}[0] < 0){
+			print "Error: No gene order at index ${ $options{list}}[0].\n";
+			return;
+		}
+
+		foreach my $index (@{ $options{list}}){
+			$index--;
+			my $order = eval{ $orders[$index] };
+			if($@){
+				print "Error: $@";
+				return 0;
+			}elsif($order){
+				my $width = length($orders[$index]->name);
+				printf ("%-4d%s\n",$index+1,$orders[$index]->name.":");
+				unless($options{names} || $options{taxonomy}){
+					print $order->order,"\n","-" x $wchar,"\n";
+				}
+				if($options{taxonomy}){
+					my @tax = join '; ', $order->classification;
+					print "@tax\n","-" x $wchar,"\n";
+				}
+			}else{
+				$index++;
+				print "Error: No gene order at index $index\n";
+			}
+		}
+	}else{
+		$options{all}=1;
+		&List();
+	}
+}
+		
+
+#Converts inputs files to file of specified format
+sub Convert {
+	my $set;
+	$options{noadd} = 1 unless($options{add});
+	return unless( $set = &GetInputs($options{convert}));
+	if( $options{to} eq "" || $options{to} =~ /^-/){
+		print "Error: No 'to' format specified\n";
+		return 0;
+	}
+
+	$options{format} = $options{to};
+	$options{export} = $options{outfile};
+	&Export($set);
+}
+
+#Allows corrections of mis-annotations etc.
+sub Edit {
+	unless(defined $cw_set){
+		print "Error: No gene orders have been imported\n";
+		return;
+	}
+	
+	my $set = $cw_set;
+	
+	if(@{ $options{edit}}){
+	}
+	
+}
+
+#Allows merging of genomes into multi-chromosomal genomes
+sub Merge {
+	unless(defined $cw_set){
+		print "Error: No gene orders have been imported\n";
+		return;
+	}
+	
+	my $set = $cw_set;
+	
+	
+	if(@{ $options{merge}}){
+		if($options{names}){
+			foreach my $name (@{$options{merge}}){
+				
+			}
+		}else{
+			foreach my $index (@{$options{orders}}){
+				#print "$index\n";
+				unless( $index =~ /^\d+$/){
+					print "Error: Value '$index' is not numeric.".
+						  "'merge' expects numeric values unless '-names' is set.\n";
+					return 0;
+				}
+			
+			}
+		}
+	}
+	
+}
+	
+
+#Applies options to set
+sub ApplyOptions {
+	my ($set,$from_inputs) = @_;
+	unless(defined $set){
+		unless(defined $cw_set){
+			print "Error: No gene orders have been imported\n";
+			return;
+		}
+		
+		$set = $cw_set;
+	}
+	
+	#ApplyOptions can also be called from GetInputs in order to save some speed.
+	#In that case, we should not apply certain options again when ApplyOptions
+	#is called from Import.  Likewise, we should not apply certain options when
+	#called from GetInputs
+	
+	#Applied is set after ApplyOptions is called from GetInputs
+	unless($applied){
+		if(scalar( @{ $options{rename}}) == 1){
+			if($options{table}){
+				my $table = ${ $options{rename}}[0];
+				unless(open FILE, $table){
+					print "Error: Can't open synonym table file '$table'\n";
+					return 0;
+				}
+				close FILE;
+				
+				print "Renaming genes from table '$table'\n" if($verbose);
+				if(ref($set) eq 'ARRAY'){
+					foreach my $order (@$set){
+						eval { $order->rename_genes( -table => $table) };
+						if($@){print "Error: $@";return 0;}
+					}
+				}else{
+					eval { $set->rename_genes( -table => $table) };
+					if($@){print "Error: $@";return 0;}
+				}
+			}else{
+				print "rename requires at least two synonymous gene names\n";
+				return 0;
+			}
+		}elsif(scalar( @{ $options{rename}}) > 1){
+			print "Renaming genes...\n" if($verbose);
+			if(ref($set) eq 'ARRAY'){
+				foreach my $order (@$set){
+					eval { $order->rename_genes( -list => @{$options{rename}}) };
+					if($@){print "Error: $@";return 0;}
+				}
+			}else{
+				eval { $set->rename_genes( -list => @{$options{rename}}) };
+				if($@){print "Error: $@";return 0;}
+			}
+		}
+	}
+	
+	if($options{filter}){
+		
+		my (@filtered,$filtered_genes,$filter);
+		
+		unless($from_inputs){
+			my @orders = $set->orders();
+			
+			if($options{except}){
+				$set->filter_orders();
+				$filter .= "-except\n" if($verbose);
+			}
+			
+			#create a hash for populating with options to filter_orders
+			my %param;
+		
+			#Minima
+			if(defined $limits{min_genes}){
+				$filter .= "-minimum #genes=$limits{min_genes}\n" if($verbose);
+				$param{'-min_genes'} = $limits{min_genes};
+			}
+			if(my @d = grep(defined $limits{"min_$_"},Bio::GeneOrder::Distance->supported_distances)){
+				map(eval{my $limit = $limits{"min_$_"}; $filter .= "-minimum #$_=$limit\n"},@d) if($verbose);
+				map($param{"-min_$_"} = $limits{"min_$_"},@d);
+			}
+			if(defined $limits{min_copies}){
+				if($options{limit} ne ""){
+					$param{'-name'} = $options{limit};
+					$filter .= "-minimum #copies '$options{limit}'=$limits{min_copies}\n" if($verbose);
+				}else{
+					$filter .= "-minimum #copies=$limits{min_copies}\n" if($verbose);
+				}
+				
+				$param{'-min_copies'} = $limits{min_copies};
+			}
+			
+			#Maxima
+			if(defined $limits{max_genes}){
+				$filter .= "-maximum #genes=$limits{max_genes}\n" if($verbose);
+				$param{'-max_genes'} = $limits{max_genes};
+			}
+			if(my @d = grep(defined $limits{"max_$_"},Bio::GeneOrder::Distance->supported_distances)){
+				map(eval{my $limit = $limits{"max_$_"}; $filter .= "-maximum #$_=$limit\n"},@d) if($verbose);
+				map($param{"-max_$_"} = $limits{"max_$_"},@d);
+			}
+			if(defined $limits{max_copies}){
+				if($options{limit} ne ""){
+					$param{'-name'} = $options{limit};
+					$filter .= "-maximum #copies '$options{limit}'=$limits{max_copies}\n" if($verbose);
+				}else{
+					$filter .= "-maximum #copies=$limits{max_copies}\n" if($verbose);
+				}
+				
+				$param{'-max_copies'} = $limits{max_copies};
+			}
+			
+			if(scalar keys %param > 0){
+				$param{'-cluster_size'} = defined $options{cluster_size} ? $options{cluster_size} : 1;
+			}
+	
+			#Other options
+			if($options{flush}){
+				$filter .= "-flush\n" if($verbose);
+				$param{'-flush'} = 1;
+			}
+			
+			if($options{unique}){
+				$filter .= "-unique\n" if($verbose);
+				$param{'-unique'} = 1;
+				$options{unique} = undef;
+			}
+			
+			my $individual = 0;
+			
+			if(@{ $options{orders}}){
+				if($options{except}){
+					$set->filter_orders();
+				}
+				
+				if($options{names}){
+					$filter .= "-gene orders:\n" if($verbose);
+					foreach my $name (@{$options{orders}}){
+						$filter .= "'$name'\n" if($verbose);
+						$param{-name} = $name;
+						push @filtered, eval { $set->filter_orders(%param) };
+						if($@){print "Error: $@";return 0;}
+					}
+				}else{
+					$filter .= "-gene orders: @{$options{orders}}\n" if($verbose);
+					foreach my $index (@{$options{orders}}){
+						#print "$index\n";
+						unless( $index =~ /^\d+$/){
+							print "Error: Value '$index' is not numeric.".
+								  "'-orders' expects numeric values unless '-names' is set.\n";
+							return 0;
+						}
+						#print $orders[$index -1]->name,"\n";
+						$param{-name} = $orders[$index -1]->name;
+						push @filtered, eval { $set->filter_orders(%param) };
+						if($@){print "Error: $@";return 0;}
+					}
+				}
+				
+				$individual = 1;
+			}
+			
+			if(@{ $options{clades}}){
+				my %found;
+				foreach my $order (@orders){
+					foreach my $clade (@{$options{clades}}){
+						if( grep(lc($_) eq lc($clade), $order->classification) ){
+							$found{$clade}++;
+							$param{-name} = $order->name;
+							push @filtered, eval { $set->filter_orders(%param) };
+							if($@){print "Error: $@";return 0;}
+						}
+					}
+				}
+				
+				if($verbose){
+					foreach my $clade (@{$options{clades}}){
+						print "Clade '$clade' not found\n" unless defined $found{$clade};
+					}
+					
+					if(%found){
+						$filter .= "-clades:";
+						foreach (keys %found){
+							$filter .= "\t$_\n";
+						}
+					}
+				}
+				
+				$individual = 1;
+			}
+				
+			undef %limits;
+			
+			push @filtered, $set->filter_orders(%param) unless $individual;
+			
+			if($options{except}){
+				@filtered = $set->filter_orders( '-invert' => 1);
+			}
+					
+		}
+		
+		if(@{ $options{genes}}){
+			unless($applied){
+				if($options{except}){
+					$set->filter_genes();
+				}
+			}
+			
+			unless($from_inputs){			
+				if($options{local}){
+					$filter .= "-local genes\n";
+					$filtered_genes += eval { $set->filter_genes( '-local' => 1 ) };
+					if($@){print "Error: $@";return 0;}
+				}
+			}
+			
+			unless($applied){
+				
+				if($options{type}){
+					if(${$options{genes}}[0] eq ''){
+						print "Error: No gene types specified\n";
+						return;
+					}
+					foreach my $type (@{$options{genes}}){
+						$filter .= "-gene type: '$type' ...\n" if($verbose);
+						if(ref($set) eq 'ARRAY'){
+							foreach my $order (@$set){
+								$filtered_genes += eval { $order->filter_genes( -type => $type ) };
+								if($@){print "Error: $@";return 0;}
+							}
+						}else{
+							$filtered_genes += eval { $set->filter_genes( -type => $type ) };
+							if($@){print "Error: $@";return 0;}
+						}
+					}
+				}elsif(${$options{genes}}[0] ne ''){
+					foreach my $name (@{$options{genes}}){
+						$filter .= "-genes: '$name' ...\n" if($verbose);
+						if(ref($set) eq 'ARRAY'){
+							foreach my $order (@$set){
+								$filtered_genes += eval { $order->filter_genes( -name => $name ) };
+								if($@){print "Error: $@";return 0;}
+							}
+						}else{
+							$filtered_genes += eval { $set->filter_genes( -name => $name ) };
+							if($@){print "Error: $@";return 0;}
+						}
+					}
+				}
+			}
+			
+			unless($from_inputs){
+				if($options{invert}){
+					$set->filter_genes( '-invert' => 1);
+				}
+			}
+		}
+		
+		if($options{clear}){
+			eval{ $set->filter_orders() };
+			if($@){print "Error: $@";return 0;}
+			eval{ $set->filter_genes() };
+			if($@){print "Error: $@";return 0;}
+			undef $filter;
+			undef $main_filter;
+		}
+		
+		if($verbose){
+			if($filter){
+				print "Filter set:\n$filter\n";
+				$main_filter = $filter;
+			}elsif($main_filter){
+				print "Currently set filter:\n$main_filter\n";
+				my @forders = $set->orders(-filtered => 1);
+				my @fgenes = $set->genes(-filtered => 1);
+				
+				print scalar @forders," filtered orders:\n";
+				foreach(@forders){
+					print $_->name,"\n";
+				}
+				print "\n";
+				print scalar @fgenes," filtered genes:\n";
+				foreach(@fgenes){
+					print $_->name,"\n";
+				}
+			}elsif($options{clear}){
+				print "Filter cleared\n";
+			}else{
+				print "No filter set\n";
+			}
+			
+			if($filter){
+				print "$filtered_genes genes filtered\n" if $filtered_genes;
+				print scalar @filtered," gene orders filtered:\n";
+			}
+			
+			foreach (@filtered){
+				print $_->name."\n";
+			}
+		}
+			
+	}
+	
+	unless($from_inputs){
+		if($options{reorder}){
+			my $reordered = eval{ $set->reorder($options{reorder}) };
+			if($@){print "Error: $@";return 0;}
+			print "$reordered gene orders reordered on '$options{reorder}'\n" if $verbose;
+		}
+	}
+	
+	$applied = 0 if($applied);
+	$applied = 1 if($from_inputs);
+
+	return 1;	
+}
+
+#Puts inputs into set
+sub GetInputs {
+	my $ref = shift;
+	my (@inputs,@orders,$io,$set);
+	unless( ${ $ref}[0] ne ""){
+		print "Error: No input files specified\n";
+		return 0;
+	}
+	
+	if($command eq 'convert'){
+		if( $options{from} eq "" || $options{from} =~ /^-/){
+			print "Error: No 'from' format specified\n";
+			return 0;
+		}
+		$format = $options{from};
+	}else{
+		if( $options{format} eq "" || $options{format} =~ /^-/){
+			print "Error: No format specified\n";
+			return 0;
+		}
+		$format = $options{format};
+	}
+
+	if($format eq 'accession'){
+		$io = 'acc';
+	}elsif($format eq 'object'){
+		$io = 'obj';
+	}else{
+		my $module = "Bio::GeneOrder::SetIO::$format";
+		eval "require $module";
+		if($@){
+			$module = "Bio::SeqIO::$format";
+			eval "require $module";
+			if($@){
+				print "Error: Unsupported input format '$format'.\n";
+				return 0;
+			}else{
+				$io = 'seq';
+			}
+		}else{
+			$io = 'set';
+
+			eval{ $module->next_set(1) };
+			if($@){
+				print "Error: Unsupported input format '$format'.\n";
+				return 0;
+			}
+		}
+	}
+	
+	if(@{ $options{list}}){
+		foreach my $filename (@{ $ref}){
+			unless(open FILE, "$filename"){
+				print "Error: Can't open file '$filename'\n";
+				return 0;
+			}
+			while(<FILE>){
+				my $file = $_;
+				chomp $file;
+				
+				push @inputs, $file;
+			}
+			close FILE;
+		}
+	}else{
+		@inputs = @{ $ref};
+	}
+	
+	unless(@inputs){
+		print "Error: No inputs specified.\n";
+		return 0;
+	}
+
+	unless($options{quiet}){
+		if($io eq 'acc'){
+			print "Downloading sequence files (",scalar @inputs,")\n  0%|\r" if($verbose);
+		}elsif($io eq 'seq'){
+			print "Reading '$format' sequence files (",scalar @inputs,")\n  0%|\r" if($verbose);
+		}elsif($io eq 'set'){
+			print "Reading '$format' gene order files (",scalar @inputs,")\n" if($verbose);
+		}elsif($io eq 'obj'){
+			print "Reading GeneOrder::Set object files (",scalar @inputs,")\n  0%|\r" if($verbose);
+		}
+	}
+	
+	#Skip blank lines
+	@inputs = grep($_ =~ /\S/, @inputs);
+	
+	my $i=1;
+	foreach my $input (@inputs){
+		$|=1;
+		#If we're using gene order set files
+		if($io eq 'set'){
+			unless(open FILE, "$input"){
+				print "Error: Can't open file '$input'\n";
+				next;
+			}
+			close FILE;
+			$setio = eval { Bio::GeneOrder::SetIO->new( -file	=>	$input,
+														-format =>  $format,	
+														-encoding => $encoding ) };
+			if($@){print "Error in $input: $@";next;}
+			
+			push @orders, eval { $setio->next_set };
+			if($@){print "Error in $input: $@";next;}
+		#If we're using sequence files
+		}elsif($io eq 'seq'){
+			unless(open FILE, "$input"){
+				print "Error: Can't open file '$input'\n";
+				next;
+			}
+			close FILE;
+			$setio = eval { Bio::SeqIO->new( -file	=>	$input,
+											 -format => $format ) };
+			if($@){print "Error in $input: $@";next;}
+			$seq = eval{ $setio->next_seq };
+			if($@){print "Error in $input: $@";next;}
+			if(defined $seq){
+				my $order = eval { Bio::GeneOrder->new($seq) };
+				if($@){print "Error: $@";next;}
+				push @orders, $order;
+			}else{
+				print "Error: Couldn't read sequences from '$input'\nIf you are using a list, use '-list'\n";
+				next;
+			}
+			
+			while( my $seq = eval{ $setio->next_seq }){
+				if($@){print "Error: $@";next;}
+
+				my $order = eval { Bio::GeneOrder->new($seq) };
+				if($@){print "Error: $@";next;}
+
+				push @orders, $order;
+			}
+		#If we're using accession numbers
+		}elsif($io eq 'acc'){
+			my $db = Bio::DB::RefSeq->new();
+			$db->retrieval_type('tempfile');
+			my $order = eval { Bio::GeneOrder->new($db->get_Seq_by_acc($input)) };
+			if($@){print "Error in $input: $@";next;}
+			
+			push @orders, $order;
+		}elsif($io eq 'obj'){
+			$set = eval { Bio::GeneOrder::Set->new( '-file' => $input) };
+			if($@){print "Error in $input: $@";next;}
+			if($options{add}){
+				push @orders, $set->orders;
+			}
+		}
+
+		#Update percentage ticker
+		if($verbose){
+			my $percent = int(100*$i/scalar(@inputs));
+			my $progress = "." x int($percent/2);
+			printf("%3d\%|$progress",$percent);
+			if($i++ < scalar(@inputs)){
+				print "\r";
+			}else{
+				print "|\n";
+			}
+		}
+	}
+	
+	if($io ne 'obj' && scalar @orders == 0){
+		print "Error: No valid inputs read.\n";
+		return 0;
+	}
+	
+	&ApplyOptions(\@orders,1);
+	
+	if($options{noadd}){
+		unless($io eq 'obj'){
+			$set = eval { Bio::GeneOrder::Set->new( @orders) };
+		}
+	}else{
+		print "Adding gene orders to memory...\n" if($verbose);
+		eval{ $cw_set->push(@orders) };
+	}
+	if($@){print "Error: $@";return 0;}
+
+	if($io eq 'obj'){
+		print $set->no_orders," gene orders imported into memory.\n" if($verbose);
+	}else{
+		print scalar(@orders)," gene orders imported into memory.\n" if($verbose);
+	}
+
+	return $set;
+}
+
+#Print out usage instructions
+sub Help {
+	my $com = shift || $options{help};
+
+	$com = lc($com);
+	
+	unless($com){
+	
+	print "
+[[ $TITLE help ]]
+
+The following commands are always available:
+
+open		<filenames> ... [-options]
+save		<filename> [-options]
+import		<filenames> ... -format <format> [-options]
+export		<filename> -format <format> [-options]
+convert		<filenames> ... -from <format> -to <format> [-options]
+compare		<orders> ... [-options]
+
+The following commands require that a file has been imported first:
+
+list		[<orders> ...] [-all] [-next]
+rename		<list> [-table]
+reorder		<gene name>
+filter		[-clear] [-genes <genes> ...] [-orders <orders> ...] [-names] [-type]
+      		[-unique] [-flush] [-minimum|-maximum] [-shared <integer>] [-breakpoints <integer>]
+copies
+adjacencies
+breakpoints
+inversions
+NJ
+UPGMA
+
+Type 'help commands' or 'help cmds' for a one-line description of each command and option.
+Type 'help formats' or 'help fmts' to see a list of available file formats.
+
+Type '<cmdname> ?' to see detailed usage and options.\n\n";
+	return;
+	}
+	
+	if($com eq 'import'){
+print "
+[[ Command: 'import' ]]
+
+Read from inputs from one or more files and keep them in memory.
+
+Usage:	import <filenames> ... -format <format> [-options]
+
+[ Options: ]
+-format	Input format. One of 'object', 'accession', a SeqIO format or a SetIO format.
+
+-list	Interprets input files as lists of filenames.
+-add	Do not overwrite gene orders in memory, add to them.
+-noadd	Overwrite gene orders in memory.
+-filter		See 'filter ?' for details.
+-reorder	See 'reorder ?' for details.
+-rename 	See 'rename ?' for details.\n\n";
+	}elsif($com eq 'open'){
+print "
+[[ Command: 'open' ]]
+
+Open one or more gene order files and load gene orders into memory.
+(Equivalent to 'import <filenames> -format fasta')
+
+Usage:	open <filenames> [-options]
+
+[ Options: ]
+-filter		See 'filter ?' for details.
+-reorder	See 'reorder ?' for details.
+-rename 	See 'rename ?' for details.\n\n";
+	}elsif($com eq 'save'){
+print "
+[[ Command: 'save' ]]
+
+Save gene orders in memory to a gene order formatted file.
+(Equivalent to 'export <filename> -format fasta')
+
+Usage:	save <filename> [-options]
+
+[ Options: ]
+-filter		See 'filter ?' for details.
+-reorder	See 'reorder ?' for details.
+-rename 	See 'rename ?' for details.\n\n";
+	}elsif($com eq 'breakpoints'){
+print "
+[[ Command: 'breakpoints' ]]
+
+Displays a breakpoint distance matrix for all unfiltered gene orders
+
+Usage:	breakpoints
+
+For more detailed comparisons, use the 'compare' command.\n\n";
+	}elsif($com eq 'copies'){
+print "
+[[ Command: 'copies' ]]
+
+Displays a matrix of numbers of copies of each gene for all unfiltered gene orders
+
+Usage:	copies
+
+For more detailed comparisons, use the 'compare' command.\n\n";
+	}elsif($com eq 'adjacencies'){
+print "
+[[ Command: 'adjacencies' ]]
+
+Displays a matrix of shared gene boundaries for all unfiltered gene orders
+
+Usage:	adjacencies
+
+For more detailed comparisons, use the 'compare' command.\n\n";
+	}elsif($com eq 'inversions'){
+print "
+[[ Command: 'inversions' ]]
+
+Displays an inversion distance matrix for all unfiltered gene orders
+
+Usage:	adjacencies
+
+For more detailed comparisons, use the 'compare' command.\n\n";
+	}elsif($com eq 'nj'){
+print "
+[[ Command: 'NJ' ]]
+
+Displays a Neighbor-Joining tree using a distance matrix calculated 
+from all unfiltered gene orders.
+
+Usage:	NJ <distance>
+
+Where <distance> is one of 'breakpoints', 'inversions', 'adjacencies', 'copies'\n\n";
+	}elsif($com eq 'upgma'){
+print "
+[[ Command: 'UPGMA' ]]
+
+Displays an Unweighted Pair Group Method with Arithmetic mean (UPGMA) tree
+using a distance matrix calculated from all unfiltered gene orders.
+
+Usage:	UPGMA <distance>
+
+Where <distance> is one of 'breakpoints', 'inversions', 'adjacencies', 'copies'\n\n";
+	}elsif($com eq 'export'){
+print "
+[[ Command: 'export' ]]
+
+Export all unfiltered gene orders to file.
+
+Usage:	export <filename> -format <format> [-options]
+
+[ Options: ]
+-format	  Output format. One of 'object', 'accession', or a SetIO format.
+
+-encoding Encoding to use if the output format requires it. 
+-filter		See 'filter ?' for details.
+-reorder	See 'reorder ?' for details.
+-rename 	See 'rename ?' for details.\n\n";
+	}elsif($com eq 'compare'){
+print "
+[[ Command: 'compare' ]]
+
+Gets gene orders by name or index already in memory, or from input files,
+and compares the first gene order to each of the rest in the list.
+Output is a visual comparision of shared gene boundaries.
+
+Usage:	compare	<orders> ... [-options]
+
+[ Options: ]
+-names	  Interprets <orders> as names of gene orders.
+-files	  Interprets <orders> as file names.
+	  Without -names or -files, compare expects numeric indeces of gene orders in memory.
+-format   Input format for -files. One of 'object', 'accession', a SeqIO format or a SetIO format.
+-list	  Interprets input files as lists of filenames.
+-outfile  Output file to save comparison results.\n\n";
+	}elsif($com eq 'convert'){
+print "
+[[ Command: 'convert' ]]
+
+Imports the gene orders in several files and writes them to a single file.
+
+Usage:	convert <filenames> ... -from <format> -to <format> [-options]
+
+[ Options: ]
+-from	 Input format. One of 'object', 'accession', a SeqIO format or a SetIO format.
+-to	 Output format. One of 'object', or a SetIO format.
+
+-list	 Interprets input files as lists of filenames.
+-add	 Add the imported gene orders to memory.
+-filter		See 'filter ?' for details.
+-reorder	See 'reorder ?' for details.
+-rename 	See 'rename ?' for details.\n\n";
+	}elsif($com eq 'list'){
+print "
+[[ Command: 'list' ]]
+
+Lists the specified gene orders identified by their index.
+If none are provided, lists all unfiltered gene orders.
+
+Usage:	list [<orders> ...] [-all] [-next] [-names]
+
+[ Options: ]
+-all	   Displays all gene orders in memory [default].
+-next	   Displays the next gene order in memory.
+-names	   Displays only the names of gene orders in memory
+-taxonomy  Displays the taxonomic lineage for each gene order (if available)\n\n";
+	}elsif($com eq 'filter'){
+print "
+[[ Command: 'filter' ]]
+
+Filters gene orders or genes that match the given name or type criteria.
+
+Usage:	filter [-clear] [-genes <genes> ...] [-orders <orders> ...] [-names] [-type] [-local]
+               [-unique] [-flush] [-minimum|-maximum] [-shared <integer>] 
+               [-no_genes <integer>] [-breakpoints <integer>] [-copies <integer>]
+
+[ Options: ]
+-clear		Clears the currently set filter.
+-genes		Filters the genes in <genes> from all gene orders in memory.
+-orders		Filters the gene orders in <orders> from memory.
+-names		Interprets <orders> as gene order names.
+		Without this, filter expects numeric indeces.
+-type		Interprets <genes> as the type names of genes ie. tRNA, mRNA, etc.
+		Without this, filter expects gene names.
+-clade		Filters those gene orders contained within the specified taxonomic group
+-local		When used with -genes, filters genes that are not represented in every gene order
+-unique		Filters all but one of any gene orders that share every gene boundary.
+-flush  	Filters gene orders to that all gene orders are of the same length.
+-minimum 	Sets the limits in force as minima.
+-maximum 	Sets the limits in force as maxima.
+-shared		Sets a limit for the number of shared gene boundaries and filters any orders
+		that violate the limit with more than a certain number of gene orders
+		specified by -clustersize.
+-breakpoints	Like -shared but for breakpoints.
+-copies		Sets a limit on the number of copies of <genes> that a gene order may have.
+		-cluster_size does not apply to this limit.
+-no_genes	Sets a limit on the number of genes any one gene order may have.
+-cluster_size   Sets the maximum number of gene orders with which any one gene order may violate
+		the given limits.
+-except		Filters those gene orders not matching any of the filter criteria.\n\n";
+}elsif($com eq 'reorder'){
+print "
+[[ Command: 'reorder' ]]
+
+Reorders the gene orders so that the specified gene appears first.
+
+Usage:	reorder <gene name>\n\n";
+	}elsif($com eq 'rename'){
+print "
+[[ Command: 'rename' ]]
+
+Renames genes with names in a list to the first name in the list.
+Optionally a synonym table file may be provided with which to rename all genes.
+
+Usage:	rename <list> [-table]
+
+[ Options: ]
+-table	Interprets <list> as a filename containing a synonymous gene name table.
+	See Bio::GeneOrder for details on this table format.\n\n";
+	}elsif($com eq 'commands' || $com eq 'cmds'){
+print "
+[[ COMMANDS: ]]
+
+open		Load gene orders into memory from a gene order formatted file
+save		Save gene orders into a gene order formatted file
+import		Read from inputs from one or more files and keep them in memory.
+export		Export all gene orders in memory to file.
+distance	Displays a breakpoint distance matrix for all gene orders in memory.
+copies		Displays a matrix of numbers of copies of each gene for all gene orders in memory.
+shared		Displays a matrix of shared gene boundaries for all gene orders in memory.
+NJ		Displays a Neighbor-Joining tree calculated from a distance matrix.
+UPGMA		Displays an UPGMA tree calculated from a distance matrix.
+compare		Perform pairwise comparisons of gene orders to find shared gene boundaries.
+convert		Import gene orders in several files and writes them to a single file.
+list		Displays gene orders in memory.
+filter		Filters gene orders or genes that match the given name or type criteria.
+rename 		Renames synonymous gene names.
+reorder 	Reorders gene orders so that specified gene is first.
+
+[[ OPTIONS: ]]
+
+-filter		Same as command.
+-rename		Same as command.
+-reorder	Same as command.
+-format		File format, 'object', 'accession', a SeqIO format, or a SetIO format.
+-encoding	A SetIO format encoding required by certain SetIO formats.
+-from		Input file format.
+-to		Output file format.
+-outfile	Output file name.
+-table		Interpret input file as a synonym table.
+-matrix		Displays comparison results in a matrix.
+-distance	Formats -matrix as a breakpoints distance matrix.
+-list		Interpret input files as lists of file names.
+-all		Apply to all gene orders.
+-add		Add imported gene orders to memory.
+-noadd		Do not add imported gene orders to memory.
+-genes		Apply to genes in list.
+-type		-genes list is a list of gene types.
+-local		Removes genes that are not present in all gene orders.
+-orders		Apply to orders in list.
+-names		-orders list is a list of gene names.
+-flush		All gene orders must be of the same length.
+-unique		No two orders may share all gene boundaries.
+-minimum	Sets the limit as a minimum.
+-maximum	Sets the limit as a maximum.
+-next		Displays next gene order in memory.
+-cluster_size	Maximum number of gene orders with which any gene order may violate the limits.
+-no_genes	Limits the number of genes.
+-shared		Limits the number of shared gene boundaries.
+-breakpoints	Limits the number of breakpoints.
+-copies		Limits the number of copies of any one gene.
+-quiet		Silence messages.
+-verbose	Show messages.\n\n";
+	}elsif($com eq 'options' || $com eq 'opts'){
+		&Help('commands');
+	}elsif($com eq 'formats' || $com eq 'fmts'){
+	
+		eval 'use File::Spec';
+		if($@){print "Error: $@";return 0;}
+		eval 'use File::Find';
+		if($@){print "Error: $@";return 0;}
+		
+		print "
+[[ SUPPORTED FORMATS: ]]
+
+";
+
+		my @seqio = _find('Bio::SeqIO::');
+		my @setio = _find('Bio::GeneOrder::SetIO::');
+		my %encodings;
+		no strict;
+		foreach(@setio){
+			if(${'Bio::GeneOrder::SetIO::'.$_.'::'}{encodings}){
+				$encodings{$_} = ${'Bio::GeneOrder::SetIO::'.$_.'::'}{encodings};
+			}
+		}
+		use strict;
+		
+		if(@setio){
+			print "GeneOrder formats:\n------------------\n";
+			print join ", ", @setio;
+			print "\n\n";
+		}
+		if(%encodings){
+			foreach(keys %encodings){
+				print "\t$_ encodings:\n"."\t". '-' x (length($_)+11)."\n\t";
+				print join ", ", @{ $encodings{$_}};
+				print "\n\n";
+			}
+		}
+		if(@seqio){
+			print "Sequence formats:\n-----------------\n";
+			print join ", ", @seqio;
+			print "\n\n";
+		}
+
+	}elsif($com eq '?' || $com eq 'help'){
+		$options{help} = undef;
+		&Help();
+	}else{
+		warn("Unknown command '$com'.\n\n");
+	}
+}
+
+####################################################################################
+####################################################################################
+# internal subroutines
+#
+
+#Gets updated maximum and minimum information while parsing options
+sub _min_max {
+	my $limit = shift;
+
+	#A limit type of 1 or 2 is set by the commandline
+	#but actual limits are not set until after parsing is complete
+	if($limits{set} == 1){
+		my $defined;
+		if(my @d = grep(defined $options{$_},Bio::GeneOrder::Distance->supported_distances)){
+			map($limits{"min_$_"} = $options{$_},@d);
+			map(delete $options{$_},@d);
+			$defined++;
+		}
+		if(defined $options{no_genes}){
+			$limits{min_genes} = $options{no_genes};
+			delete $options{no_genes};
+			$defined++;
+		}
+		if($options{copies} > 0){
+			$limits{min_copies} = $options{copies};
+			delete $options{copies};
+			$defined++;
+		}
+		unless($defined){
+			print "Error: minimum requires additional arguments\n";
+			%limits = ();
+			return;
+		}
+	}elsif($limits{set} == 2){
+		my $defined;
+		if(my @d = grep(defined $options{$_},Bio::GeneOrder::Distance->supported_distances)){
+			map($limits{"max_$_"} = $options{$_},@d);
+			map(delete $options{$_},@d);
+			$defined++;
+		}
+		if(defined $options{no_genes}){
+			$limits{max_genes} = $options{no_genes};
+			delete $options{no_genes};
+			$defined++;
+		}
+		if($options{copies} > 0){
+			$limits{max_copies} = $options{copies};
+			delete $options{copies};
+			$defined++;
+		}
+		unless($defined){
+			print "Error: maximum requires additional arguments\n";
+			%limits = ();
+			return;
+		}
+	}
+	
+	$limits{set} = $limit;
+
+}
+
+sub _write_tree_Helper {
+    my $tree = shift;
+    return unless defined $tree;
+
+	@ascii =();
+	%x_s =();
+	%y_s =();
+
+	my @l = grep($_->is_Leaf,$tree->get_nodes);
+	my @d = sort {$a <=> $b} map($_->depth+1,$tree->get_nodes);
+	$tree_length = $d[-1];
+
+	($display_width) = GetTerminalSize();
+	$display_width -= (sort {$b <=> $a} map( length($_->name), $cw_set->orders))[0] + 5;
+
+	my $empty = ' ' x $display_width;
+
+	for(my $u=0;$u<scalar(@l)*2;$u++){
+		@{ $ascii[$u]} = split '', $empty;
+	}
+
+	my $y=0;
+	foreach my $l (@l){
+		$y_s{$l} = $y;
+		if($options{NJ}){
+			$x_s{$l} = int(($l->depth/$tree_length)*$display_width) +1;
+		}else{
+			$x_s{$l} = $display_width +1;
+		}
+
+		$ascii[$y_s{$l}][$x_s{$l}] = sprintf(" %s",$l->id);
+		$y += 2;
+	}
+
+	$y_s{$tree->get_root_node} = _avg_descend_y( $tree->get_root_node);
+	$x_s{$tree->get_root_node} = 0;
+	$ascii[$y_s{$tree->get_root_node}][$x_s{$tree->get_root_node}] = '+';
+
+	foreach my $n ($tree->get_nodes){
+		my $x = $x_s{$n}-1;
+		while($x > $x_s{$n->ancestor}){
+			$ascii[$y_s{$n}][$x--] = '-';
+		}
+	
+		my @local_ys = sort {$a <=> $b} map($y_s{$_}, $n->each_Descendent);
+		
+		unless($n->is_Leaf){
+			$y = $y_s{$n}+1;
+			while($y < $local_ys[-1]){
+				$ascii[$y++][$x_s{$n}] = '|';
+			}
+			$ascii[$y][$x_s{$n}] = '\\' unless($ascii[$y][$x_s{$n}] =~ /[\+\|]/);
+	
+			$y = $y_s{$n}-1;
+			while($y > $local_ys[0]){
+				$ascii[$y--][$x_s{$n}] = '|';
+			}
+			$ascii[$y][$x_s{$n}] = '/' unless($ascii[$y][$x_s{$n}] =~ /[\+\|]/);
+		}
+	}
+	
+	my $ascii_tree;
+	foreach my $row (@ascii){
+		$ascii_tree .= join "", @{ $row};
+		$ascii_tree .="\n";
+	}
+
+	undef @ascii;
+	undef %x_s;
+	undef %y_s;
+
+	return $ascii_tree;
+}
+
+#Calculate the coordinates of each node
+sub _avg_descend_y {
+	my $node = shift;
+
+	if( $node->is_Leaf){
+		return $y_s{$node};
+	}
+	
+	my $i = 0;
+	foreach my $d ($node->each_Descendent){
+		if($d->is_Leaf){
+			$i += $y_s{$d};
+		}else{
+			$i += _avg_descend_y($d);
+		}
+	}
+
+	my $avg = int( $i/(scalar $node->each_Descendent));
+	$y_s{$node} = $avg;
+	$x_s{$node} = int(($node->depth/$tree_length)*$display_width);
+
+	$ascii[$y_s{$node}][$x_s{$node}] = '+';
+	
+	return $avg;
+}
+
+sub _history_file {
+    require Path::Class;
+    require File::HomeDir;
+    return Path::Class::file( File::HomeDir->my_home, '.gor-history' )->stringify;
+}
+
+sub _read_history { 
+    my $h    = _history_file;
+    if ( $term->Features->{readHistory} ) {
+        $term->ReadHistory( $h );
+    } elsif ( $term->Features->{setHistory} ) {
+        if ( -e $h ) {
+            require File::Slurp;
+            my @h = File::Slurp::read_file( $h );
+            chomp @h;
+            $term->SetHistory( @h );
+        }
+    } else {
+        # warn "Your ReadLine doesn't support setHistory\n";
+    }
+
+}
+
+sub _write_history { 
+   my $h    = _history_file;
+   #warn "write history to $h\n"; # XXX
+   if ( $term->Features->{writeHistory} ) {
+       $term->WriteHistory( $h );
+   } elsif ( $term->Features->{getHistory} ) {
+       require File::Slurp;
+       my @h = map { "$_\n" } $term->GetHistory;
+       File::Slurp::write_file( $h, @h );
+   } else {
+       # warn "Your ReadLine doesn't support getHistory\n";
+   }
+}
+
+#Catch a SIG_INT and write the history file before quitting
+sub _sig_exit {
+	_write_history();
+	print "\nBye.\n";
+	exit;
+}
+
+#Find modules in a given namespace
+sub _find {
+    $category = shift;
+    return undef unless defined $category;
+
+    my $dir = File::Spec->catdir(split(/::/, $category));
+    
+    my @dirs;
+    if (defined @Module::Find::ModuleDirs) {
+        @dirs = map { File::Spec->catdir($_, $dir) }
+            @Module::Find::ModuleDirs;
+    } else {
+        @dirs = map { File::Spec->catdir($_, $dir) } @INC;
+    }
+    @results = ();
+
+    foreach $basedir (@dirs) {
+        	next unless -d $basedir;
+    	
+        find({wanted   => \&_wanted,
+              no_chdir => 1}, $basedir);
+    }
+
+    # filter duplicate modules
+    my %seen = ();
+    @results = grep { not $seen{$_}++ } @results;
+
+    return @results;
+}
+
+# 'wanted' functions for find()
+# you know, this would be a nice application for currying...
+sub _wanted {
+	
+    my $name = File::Spec->abs2rel($_, $basedir);
+    return unless $name && $name ne File::Spec->curdir();
+
+    return unless /\.pm$/ && -r;
+
+    $name =~ s|\.pm$||;
+    $name = join('::', File::Spec->splitdir($name));
+    $name =~ /::$category(.+)$/;
+
+    push @results, $1;
+}

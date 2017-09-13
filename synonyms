@@ -1,0 +1,45 @@
+>Bio::GeneOrder::synonyms
+rns			;/^(small[_ ]subunit[_ ]|12S|s)[-_ ]?r?(iboso?mal)?[-_ ]?RNA/i;/(rrn|rnr)(1|s)/i;/ssu/i
+rnl			;/^(large[_ ]subunit[_ ]|16S|l)[-_ ]?r?(iboso?mal)?[-_ ]?RNA/i;/(rrn|rnr)(2|l)/i;/lsu/i
+cox1		;/COX?[1I]/i;/cytochrome[_ ]c[_ ]oxidase[_ ]subunit[_ ]I$/i
+cox2		;/COX?(2|II)/i;/cytochrome[_ ]c[_ ]oxidase[_ ]subunit[_ ]II$/i
+cox3		;/COX?(3|III)/i;/cytochrome[_ ]c[_ ]oxidase[_ ]subunit[_ ]III$/i
+nad1		;/NA?DH?(1|I)/i;/NADH[_ ]dehydrogenase[_ ]subunit[_ ]1/i
+nad2		;/NA?DH?(2|II)/i;/NADH[_ ]dehydrogenase[_ ]subunit[_ ]2/i
+nad3		;/NA?DH?(3|III)/i;/NADH[_ ]dehydrogenase[_ ]subunit[_ ]3/i
+nad4		;/NA?DH?(4|IV)$/i;/NADH[_ ]dehydrogenase[_ ]subunit[_ ]4$/i
+nad5		;/NA?DH?(5|V)/i;/NADH[_ ]dehydrogenase[_ ]subunit[_ ]5/i
+nad6		;/NA?DH?(6|VI)/i;/NADH[_ ]dehydrogenase[_ ]subunit[_ ]6/i
+nad4L		;/NA?DH?4L/i;/NADH[_ ]dehydrogenase[_ ]subunit[_ ]4L/i
+cob			;/CYT_?B/i;/cytochrome_?b/i;/cob/i;/CTYB/i
+atp6		;/(ATP|apt)[_ ]?(synth)?(ase)?[_ ]?(F0)?[_ ]?(subunit)?[_ ]?6/i
+atp9		;/(ATP|apt)[_ ]?(synth)?(ase)?[_ ]?(F0)?[_ ]?(subunit)?[_ ]?9/i
+atp8		;/(ATP|apt)[_ ]?(synth)?(ase)?[_ ]?(F0)?[_ ]?(subunit)?[_ ]?8/i
+trnR		;/tRNA?[-_]?(Arg|R)[-_]?(\(?[agcturnyb]{3}\)?)?$/i
+trnA		;/tRN(A[-_]?Ala|A)[-_]?(\(?[agcturnyb]{3}\)?)?$/i
+trnC		;/tRNA?[-_]?C(ys)?[-_]?(\(?[agcturnyb]{3}\)?)?$/i
+trnD		;/tRNA?[-_]?(Asp|D)[-_]?(\(?[agcturnyb]{3}\)?)?$/i
+trnE		;/tRNA?[-_]?(Gl(u|x)|E)[-_]?(\(?[agcturnyb]{3}\)?)?$/i
+trnF		;/tRNA?[-_]?(Phe|F)[-_]?(\(?[agcturnyb]{3}\)?)?$/i
+trnG		;/tRNA?[-_]?G(ly)?[-_]?(\(?[agcturnyb]{3}\)?)?$/i
+trnH		;/tRNA?[-_]?H(is)?[-_]?(\(?[agcturnyb]{3}\)?)?$/i
+trnI		;/tRNA?[-_]?I(le)?[-_]?(\(?[agcturnyb]{3}\)?)?$/i
+trnK		;/tRNA?[-_]?(Lys|K)[-_]?(\(?[agcturnyb]{3}\)?)?$/i
+trnL		;/tRNA?[-_]?L(eu)?(_|-)?\d?$/i
+trnL(CUN)	;/tRNA?[-_]?L(eu)?(_|-)?\d?[-_]?((\(?.ag\)?)|(\(?CU.\)?))/i
+trnL(UUN)	;/tRNA?[-_]?L(eu)?(_|-)?\d?[-_]?((\(?.aa\)?)|(\(?UU.\)?))/i
+trnM		;/tRNA?[-_]?M(et)?[-_]?(\(?[agcturnyb]{3}\)?)?\w?$/i
+trnN		;/tRNA?[-_]?(Asn|N)[-_]?(\(?[agcturnyb]{3}\)?)?$/i
+trnP		;/tRNA?[-_]?P(ro)?[-_]?(\(?[agcturnyb]{3}\)?)?$/i;/tnrp/i
+trnQ		;/tRNA?[-_]?(Gln|Q)[-_]?(\(?[agcturnyb]{3}\)?)?$/i
+trnS		;/tRNA?[-_]?S(er)?(_|-)?\d?$/i
+trnS(AGN)	;/tRNA?[-_]?S(er)?(_|-)?\d?[-_]?((\(?.cu\)?)|(\(?AG.\)?))/i
+trnS(UCN)	;/tRNA?[-_]?S(er)?(_|-)?\d?[-_]?((\(?.ga\)?)|(\(?UC.\)?))/i
+trnT		;/tRNA?[-_]?T(hr)?[-_]?(\(?[agcturnyb]{3}\)?)?$/i
+trnV		;/tRNA?[-_]?V(al)?[-_]?(\(?[agcturnyb]{3}\)?)?$/i
+trnW		;/tRNA?[-_]?(Trp|W)[-_]?(\(?[agcturnyb]{3}\)?)?$/i
+trnX		;/tRNA?[-_]?(Sec|X)[-_]?(\(?[agcturnyb]{3}\)?)?$/i
+trnY		;/tRNA?[-_]?(Tyr|Y)[-_]?(\(?[agcturnyb]{3}\)?)?$/i
+heg			;/heg/i;/ORF/
+mutS		;/(mutS|msh1)/i
+unk			;/hypothetical[_ ]protein/i

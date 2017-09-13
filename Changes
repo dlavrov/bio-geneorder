@@ -1,0 +1,65 @@
+Revision history for Bio-GeneOrder
+
+0.9a	02/17/2009
+	First version.  Requires bioperl-1.5.2, no earlier, no later.
+
+0.9.1	2/19/2009
+
+      Requires bioperl-1.6.0 stable release.
+
+    o Bio::GeneOrder::gene
+      - Added recognition for "/note=codons recognized:XXX"
+
+    o Bio::GeneOrder::SetIO::nexus
+      - Changed 'missing' symbol for 'copies' encoding from "?" to "0"
+
+    o gnorder
+      - Added STDOUT output for comparison matrices
+      - Added open/save shortcuts for importing go files
+      - Added distance/shared/copies commands for quick comparisons
+      - Added NJ/UPGMA commands for displaying pairwise distance trees
+
+0.9.2 2/25/2009
+    
+    o Several speed and memory usage improvements
+    o Pairwise distances are now calculated correctly
+    o Annotations without tags are recognized as "unknown"
+    o Checks for anticodons already in gene names
+    o Genomes names now don't contain "mitochondrion"
+    o Comment support for 'go' files
+    o Names of removed gene orders are displayed after removal
+    o Added -names option to "list" command
+    o The GeneOrder::bound object has been discontinued
+    o Added -local option to "ignore -genes" command
+    o Copies encoding always uses numbers now.
+    o Added text wrapping for large matrices
+    o Added gene order indices at top of matrices
+
+0.9.3 5/01/2009
+
+    o Several speed and memory usage improvements
+    o 'ignore' and 'limit' commands have been replaced by 'filter' and 'purge' commands
+    o Matrix headers begin numbering from 1
+    o Added 'reorder' command
+    o Modifications to the 'compare' command
+    
+0.4 
+	09/01/2009
+
+    o Restructured entire system
+    o Using a new version number scheme
+    o The underlying gene order data structure is simply a packed array of integers
+      and a common gene naming key is maintained throughout sets of gene orders
+      this saves significant amounts of memory and makes it possible
+      to calculate distances faster and more easily with XS routines
+    o Updated compare command to display shared intervals
+    o Eliminated several methods from GeneOrder::Set
+    o Eliminated GeneOrder::Gene object
+    o Integrated an XS C library for computing common distance measures
+      including inversions, breakpoints, adjacencies, DCJ, common intervals.
+      Also included are methods for estimating correcting distances for inversions and DCJ
+      as well as inversion median solvers (Caparara, etc.)
+    o All of these distance measures are (soon to be) available through 
+      associated gnorder commands "inversions" "adjacencies" "breakpoints" "DCJ" "intervals"
+    o Versioning and change tracking have been moved to the code.google.com/p/bio-geneorder
+	  subversion repository

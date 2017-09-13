@@ -1,0 +1,27 @@
+lib/Bio/GeneOrder.pm
+ext/Distance.pm
+ext/Distance.xs
+ext/libd/distances.cpp
+ext/libd/distances.h
+ext/libd/invdist.cpp
+ext/libd/invdist.h
+ext/libd/structs.h
+ext/libd/makefile
+ext/typemap
+ext/Makefile.PL
+lib/Bio/GeneOrder/permutation.pm
+lib/Bio/GeneOrder/Set.pm
+lib/Bio/GeneOrder/SetIO.pm
+lib/Bio/GeneOrder/SetIO/fasta.pm
+lib/Bio/GeneOrder/SetIO/grappa.pm
+lib/Bio/GeneOrder/SetIO/nexus.pm
+bin/gogo
+Changes
+Makefile.PL
+MANIFEST
+README
+t/00-load.t
+t/pod-coverage.t
+t/pod.t
+synonyms
+META.yml                                 Module meta-data (added by MakeMaker)

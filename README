@@ -1,0 +1,56 @@
+Bio-GeneOrder 0.4
+
+This package contains a set of tools for working with gene order data, and is intended to be used with the Bioperl suite of perl modules for bioinformatics. Gene Orders can be created using the Bioperl Seq object, and can further be combined into sets of Gene Orders. These Set objects provide functions for organizing, storing and analyzing Gene Orders of interest, much like Alignment objects in Bioperl provide functions for organizing and analyzing collections of Sequences.
+
+Input and output of various file formats is supported through the SetIO class, modeled after the SeqIO file-handling scheme. Support is provided for various file formats including NEXUS, GRAPPA and FASTA.
+
+The Distance module provides functions for computing genomic distances between gene orders under many important rearrangement operations including breakpoints, inversions, DCJ, common intervals, TDRLs, and translocations. Multichromosomal genomes, insertions, deletions and duplications are supported where efficient algorithms are known.
+
+For questions or suggestions, contact:
+
+Dennis Lavrov <dlavrov@iastate.edu>
+Walker Pett <will.pett@gmail.com>
+
+REQUIREMENTS
+
+Bioperl-1.6.0
+Getopt::Long 2.36 or later is required for gnorder
+
+INSTALLATION
+
+To install this module, run the following commands:
+
+	perl Makefile.PL
+	make
+	make test
+	make install
+
+SUPPORT AND DOCUMENTATION
+
+After installing, you can find documentation for this module with the
+perldoc command.
+
+    perldoc Bio::GeneOrder
+
+You can also look for information at:
+
+    RT, CPAN's request tracker
+        http://rt.cpan.org/NoAuth/Bugs.html?Dist=Bio-GeneOrder
+
+    AnnoCPAN, Annotated CPAN documentation
+        http://annocpan.org/dist/Bio-GeneOrder
+
+    CPAN Ratings
+        http://cpanratings.perl.org/d/Bio-GeneOrder
+
+    Search CPAN
+        http://search.cpan.org/dist/Bio-GeneOrder/
+
+
+COPYRIGHT AND LICENCE
+
+Copyright (C) 2009 Dennis Lavrov, Walker Pett
+
+This program is free software; you can redistribute it and/or modify it
+under the same terms as Perl itself.
+

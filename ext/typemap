@@ -1,0 +1,4 @@
+intArray *      T_OPAQUEARRAY 
+OUTPUT 
+T_OPAQUEARRAY 
+        sv_setpvn($arg, (char *)$var, size_$var * sizeof(*$var));
